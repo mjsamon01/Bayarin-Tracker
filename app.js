@@ -2,6 +2,7 @@
   "use strict";
 
   var STORAGE_KEY = "bayarin-tracker:bills";
+  var SYNC_CODE_KEY = "bayarin-tracker:sync-code";
   var CATEGORIES = ["Utilities", "Rent", "Internet", "Credit Card", "Subscription", "Loan", "Other"];
   var CATEGORY_COLORS = {
     Utilities: "#8B5E3C",
@@ -24,10 +25,69 @@
     filter: "all",
     showForm: false,
     formError: "",
+    syncCode: null,
+    cloudEnabled: false,
+    showSyncModal: false,
+    syncInput: "",
+    syncError: "",
+    syncStatus: "offline", // offline | connecting | synced
   };
 
   var appEl = document.getElementById("app");
   var deferredInstallPrompt = null;
+  var dbRef = null;
+  var suppressNextCloudEcho = false;
+
+  function genSyncCode() {
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no confusing 0/O/1/I
+    var code = "";
+    for (var i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+
+  function isCloudAvailable() {
+    return typeof firebase !== "undefined" && firebase.apps && firebase.apps.length > 0;
+  }
+
+  function connectToSync(code, opts) {
+    opts = opts || {};
+    if (!isCloudAvailable()) return;
+    if (dbRef) {
+      dbRef.off();
+    }
+    state.syncCode = code;
+    state.syncStatus = "connecting";
+    localStorage.setItem(SYNC_CODE_KEY, code);
+    dbRef = firebase.database().ref("bills/" + code);
+
+    if (opts.pushLocalFirst) {
+      dbRef.set(state.bills);
+    }
+
+    dbRef.on(
+      "value",
+      function (snapshot) {
+        var cloudBills = snapshot.val();
+        state.syncStatus = "synced";
+        if (cloudBills) {
+          suppressNextCloudEcho = true;
+          state.bills = cloudBills;
+          saveBillsLocalOnly(state.bills);
+        }
+        render();
+      },
+      function () {
+        state.syncStatus = "offline";
+        render();
+      }
+    );
+  }
+
+  function pushToCloud(bills) {
+    if (dbRef) {
+      dbRef.set(bills);
+    }
+  }
 
   window.addEventListener("beforeinstallprompt", function (e) {
     e.preventDefault();
@@ -58,6 +118,18 @@
     return "upcoming";
   }
 
+  function isInCurrentMonth(dateStr) {
+    var now = new Date();
+    var d = new Date(dateStr);
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }
+
+  function monthLabel() {
+    var now = new Date();
+    var months = ["Enero","Pebrero","Marso","Abril","Mayo","Hunyo","Hulyo","Agosto","Setyembre","Oktubre","Nobyembre","Disyembre"];
+    return months[now.getMonth()] + " " + now.getFullYear();
+  }
+
   function seedBills() {
     function plusDays(n) {
       var d = new Date();
@@ -83,11 +155,18 @@
     return seed;
   }
 
-  function saveBills(bills) {
+  function saveBillsLocalOnly(bills) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(bills));
     } catch (e) {
       console.warn("Could not save bills", e);
+    }
+  }
+
+  function saveBills(bills) {
+    saveBillsLocalOnly(bills);
+    if (dbRef) {
+      pushToCloud(bills);
     }
   }
 
@@ -113,10 +192,12 @@
     var bills = state.bills.slice().sort(function (a, b) {
       return new Date(a.dueDate) - new Date(b.dueDate);
     });
-    var filtered = state.filter === "all" ? bills : bills.filter(function (b) {
-      return getStatus(b) === state.filter;
-    });
-    var totals = computeTotals(state.bills);
+    var filtered = state.filter === "all" ? bills
+      : state.filter === "month" ? bills.filter(function (b) { return isInCurrentMonth(b.dueDate); })
+      : bills.filter(function (b) { return getStatus(b) === state.filter; });
+    var totalsAll = computeTotals(state.bills);
+    var totals = state.filter === "month" ? computeTotals(filtered) : totalsAll;
+    var summaryLabelSuffix = state.filter === "month" ? " (" + monthLabel() + ")" : "";
 
     var html = "";
 
@@ -131,20 +212,26 @@
       html += '<div class="install-banner"><span>I-install ang app na ito sa iyong device para may sariling icon.</span><button id="install-btn">I-install</button></div>';
     }
 
+    if (isCloudAvailable()) {
+      var statusLabel = state.syncStatus === "synced" ? "Naka-sync ✓" : state.syncStatus === "connecting" ? "Kumokonekta..." : "Offline";
+      html += '<div class="install-banner"><span>Sync code: <strong>' + esc(state.syncCode || "—") + "</strong> · " + statusLabel + '</span><button id="sync-btn">Palitan / Ikonekta</button></div>';
+    }
+
     html += '<div class="ledger">';
 
     html += '<div class="summary-row">';
-    html += '<div class="summary-cell"><div class="label">Kabuuang Bayarin</div><div class="value">' + peso(totals.due) + "</div></div>";
-    html += '<div class="summary-cell paid"><div class="label">Nabayaran Na</div><div class="value">' + peso(totals.paid) + "</div></div>";
-    html += '<div class="summary-cell balance"><div class="label">Kulang / Balance</div><div class="value">' + peso(totals.balance) + "</div></div>";
+    html += '<div class="summary-cell"><div class="label">Kabuuang Bayarin' + esc(summaryLabelSuffix) + '</div><div class="value">' + peso(totals.due) + "</div></div>";
+    html += '<div class="summary-cell paid"><div class="label">Nabayaran Na' + esc(summaryLabelSuffix) + '</div><div class="value">' + peso(totals.paid) + "</div></div>";
+    html += '<div class="summary-cell balance"><div class="label">Kulang / Balance' + esc(summaryLabelSuffix) + '</div><div class="value">' + peso(totals.balance) + "</div></div>";
     html += "</div>";
 
     html += '<div class="toolbar">';
     html += '<div class="filters">';
     [
       ["all", "Lahat"],
-      ["overdue", "Lampas (" + totals.overdueCount + ")"],
-      ["soon", "Malapit (" + totals.soonCount + ")"],
+      ["month", "Ngayong Buwan"],
+      ["overdue", "Lampas (" + totalsAll.overdueCount + ")"],
+      ["soon", "Malapit (" + totalsAll.soonCount + ")"],
       ["paid", "Bayad na"],
     ].forEach(function (f) {
       var active = state.filter === f[0] ? " active" : "";
@@ -215,6 +302,20 @@
       html += "</form></div></div>";
     }
 
+    if (state.showSyncModal) {
+      html += '<div class="modal-backdrop" id="sync-modal-backdrop">';
+      html += '<div class="modal" id="sync-modal">';
+      html += '<div class="modal-header"><h2>Cloud Sync</h2><button class="close-btn" id="close-sync-modal">×</button></div>';
+      html += "<p style=\"font-size:13px;color:#6b6455;margin-top:0\">Ang code mo ngayon: <strong>" + esc(state.syncCode || "—") + "</strong><br/>I-type ang parehong code sa ibang device para magkasama ang data.</p>";
+      html += '<div class="form-group"><label>Sync Code</label><input type="text" id="sync-input" maxlength="6" style="text-transform:uppercase" placeholder="hal. AB3XQ9" value="' + esc(state.syncInput || "") + '" /></div>';
+      if (state.syncError) {
+        html += '<div class="error-msg">' + esc(state.syncError) + "</div>";
+      }
+      html += '<button type="button" class="submit-btn" id="sync-connect-btn">Ikonekta sa Code na Ito</button>';
+      html += '<button type="button" class="reset-link" id="sync-new-btn" style="display:block;margin:12px auto 0;color:#6b6455">O gumawa ng bagong code</button>';
+      html += "</div></div>";
+    }
+
     appEl.innerHTML = html;
     bindEvents();
   }
@@ -226,6 +327,72 @@
         if (!confirm("Sigurado ka bang gusto mong burahin lahat ng naka-save na bills?")) return;
         state.bills = [];
         saveBills(state.bills);
+        render();
+      });
+    }
+
+    var syncBtn = document.getElementById("sync-btn");
+    if (syncBtn) {
+      syncBtn.addEventListener("click", function () {
+        state.showSyncModal = true;
+        state.syncInput = "";
+        state.syncError = "";
+        render();
+      });
+    }
+
+    var closeSyncModal = document.getElementById("close-sync-modal");
+    if (closeSyncModal) {
+      closeSyncModal.addEventListener("click", function () {
+        state.showSyncModal = false;
+        render();
+      });
+    }
+
+    var syncBackdrop = document.getElementById("sync-modal-backdrop");
+    if (syncBackdrop) {
+      syncBackdrop.addEventListener("click", function (e) {
+        if (e.target === syncBackdrop) {
+          state.showSyncModal = false;
+          render();
+        }
+      });
+    }
+    var syncModal = document.getElementById("sync-modal");
+    if (syncModal) {
+      syncModal.addEventListener("click", function (e) {
+        e.stopPropagation();
+      });
+    }
+
+    var syncInputEl = document.getElementById("sync-input");
+    if (syncInputEl) {
+      syncInputEl.addEventListener("input", function () {
+        state.syncInput = syncInputEl.value.toUpperCase();
+      });
+    }
+
+    var syncConnectBtn = document.getElementById("sync-connect-btn");
+    if (syncConnectBtn) {
+      syncConnectBtn.addEventListener("click", function () {
+        var code = (state.syncInput || "").trim().toUpperCase();
+        if (code.length < 4) {
+          state.syncError = "Ilagay ang buong sync code (mula sa ibang device mo).";
+          render();
+          return;
+        }
+        state.showSyncModal = false;
+        connectToSync(code, { pushLocalFirst: false });
+        render();
+      });
+    }
+
+    var syncNewBtn = document.getElementById("sync-new-btn");
+    if (syncNewBtn) {
+      syncNewBtn.addEventListener("click", function () {
+        var code = genSyncCode();
+        state.showSyncModal = false;
+        connectToSync(code, { pushLocalFirst: true });
         render();
       });
     }
@@ -360,4 +527,16 @@
 
   state.bills = loadBills();
   render();
+
+  // Init cloud sync if Firebase is configured
+  if (isCloudAvailable()) {
+    var existingCode = localStorage.getItem(SYNC_CODE_KEY);
+    if (existingCode) {
+      connectToSync(existingCode, { pushLocalFirst: false });
+    } else {
+      state.syncCode = null;
+      state.syncStatus = "offline";
+    }
+    render();
+  }
 })();

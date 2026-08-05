@@ -1,12 +1,15 @@
-const CACHE_NAME = "bayarin-tracker-v1";
+const CACHE_NAME = "bayarin-tracker-v2";
 const ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
+  "./firebase-config.js",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./icons/maskable-192.png",
+  "./icons/maskable-512.png",
 ];
 
 self.addEventListener("install", (event) => {
