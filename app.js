@@ -2,7 +2,7 @@
   "use strict";
 
   var STORAGE_KEY = "bayarin-tracker:bills";
-  var SYNC_CODE_KEY = "bayarin-tracker:sync-code";
+  var DEVICE_ID_KEY = "bayarin-tracker:device-id";
   var CATEGORIES = ["Utilities", "Rent", "Internet", "Credit Card", "Subscription", "Loan", "Other"];
   var CATEGORY_COLORS = {
     Utilities: "#8B5E3C",
@@ -21,73 +21,25 @@
   };
 
   var state = {
+    // ---- auth ----
+    authStatus: "checking", // checking | signedOut | pending | deviceLimit | approved
+    authMode: "login", // login | signup
+    authError: "",
+    isAdmin: false,
+    showAdminPanel: false,
+    pendingUsers: [],
+    currentEmail: "",
+
+    // ---- app/bills ----
     bills: [],
     filter: "all",
     showForm: false,
     formError: "",
-    syncCode: null,
-    cloudEnabled: false,
-    showSyncModal: false,
-    syncInput: "",
-    syncError: "",
-    syncStatus: "offline", // offline | connecting | synced
   };
 
   var appEl = document.getElementById("app");
   var deferredInstallPrompt = null;
-  var dbRef = null;
-  var suppressNextCloudEcho = false;
-
-  function genSyncCode() {
-    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no confusing 0/O/1/I
-    var code = "";
-    for (var i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    return code;
-  }
-
-  function isCloudAvailable() {
-    return typeof firebase !== "undefined" && firebase.apps && firebase.apps.length > 0;
-  }
-
-  function connectToSync(code, opts) {
-    opts = opts || {};
-    if (!isCloudAvailable()) return;
-    if (dbRef) {
-      dbRef.off();
-    }
-    state.syncCode = code;
-    state.syncStatus = "connecting";
-    localStorage.setItem(SYNC_CODE_KEY, code);
-    dbRef = firebase.database().ref("bills/" + code);
-
-    if (opts.pushLocalFirst) {
-      dbRef.set(state.bills);
-    }
-
-    dbRef.on(
-      "value",
-      function (snapshot) {
-        var cloudBills = snapshot.val();
-        state.syncStatus = "synced";
-        if (cloudBills) {
-          suppressNextCloudEcho = true;
-          state.bills = cloudBills;
-          saveBillsLocalOnly(state.bills);
-        }
-        render();
-      },
-      function () {
-        state.syncStatus = "offline";
-        render();
-      }
-    );
-  }
-
-  function pushToCloud(bills) {
-    if (dbRef) {
-      dbRef.set(bills);
-    }
-  }
+  var billsRef = null;
 
   window.addEventListener("beforeinstallprompt", function (e) {
     e.preventDefault();
@@ -95,6 +47,9 @@
     render();
   });
 
+  // ============================================================
+  // Helpers
+  // ============================================================
   function todayISO() {
     return new Date().toISOString().slice(0, 10);
   }
@@ -143,33 +98,6 @@
     ];
   }
 
-  function loadBills() {
-    try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch (e) {
-      console.warn("Could not load saved bills", e);
-    }
-    var seed = seedBills();
-    saveBills(seed);
-    return seed;
-  }
-
-  function saveBillsLocalOnly(bills) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(bills));
-    } catch (e) {
-      console.warn("Could not save bills", e);
-    }
-  }
-
-  function saveBills(bills) {
-    saveBillsLocalOnly(bills);
-    if (dbRef) {
-      pushToCloud(bills);
-    }
-  }
-
   function esc(str) {
     var div = document.createElement("div");
     div.textContent = String(str);
@@ -188,7 +116,267 @@
     return { due: due, paid: paid, balance: due - paid, overdueCount: overdueCount, soonCount: soonCount };
   }
 
+  function getDeviceId() {
+    var id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = "dev-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  }
+
+  function loadLocalBills() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) {
+      console.warn("Could not load saved bills", e);
+    }
+    return [];
+  }
+
+  function saveLocalBills(bills) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(bills));
+    } catch (e) {
+      console.warn("Could not save bills", e);
+    }
+  }
+
+  function billsObjectToArray(val) {
+    if (!val) return [];
+    if (Array.isArray(val)) return val.filter(Boolean);
+    return Object.keys(val).map(function (k) { return val[k]; });
+  }
+
+  function isCloudAvailable() {
+    return typeof firebase !== "undefined" && firebase.apps && firebase.apps.length > 0;
+  }
+
+  function friendlyAuthError(code) {
+    var map = {
+      "auth/email-already-in-use": "May account na gamit ang email na ito. Subukan mag-log in.",
+      "auth/invalid-email": "Hindi valid ang email address.",
+      "auth/weak-password": "Masyadong simple ang password (dapat 6+ characters).",
+      "auth/wrong-password": "Mali ang password.",
+      "auth/user-not-found": "Walang account na gamit ang email na ito.",
+      "auth/invalid-credential": "Mali ang email o password.",
+      "auth/too-many-requests": "Sobrang dami ng attempts. Subukan ulit mamaya.",
+    };
+    return map[code] || "May naganap na error. Subukan ulit.";
+  }
+
+  // ============================================================
+  // Bills persistence (per logged-in user)
+  // ============================================================
+  function saveBills(bills) {
+    saveLocalBills(bills);
+    if (billsRef) billsRef.set(bills);
+  }
+
+  function attachBillsListener(uid) {
+    if (billsRef) billsRef.off();
+    billsRef = firebase.database().ref("users/" + uid + "/bills");
+    billsRef.on("value", function (snapshot) {
+      state.bills = billsObjectToArray(snapshot.val());
+      saveLocalBills(state.bills);
+      render();
+    });
+  }
+
+  function migrateLocalIfNeeded(uid, cb) {
+    var ref = firebase.database().ref("users/" + uid + "/bills");
+    ref.once("value").then(function (snap) {
+      var cloud = billsObjectToArray(snap.val());
+      if (cloud.length === 0) {
+        var local = loadLocalBills();
+        if (local && local.length > 0) {
+          ref.set(local).then(cb).catch(cb);
+          return;
+        }
+      }
+      cb();
+    }).catch(cb);
+  }
+
+  // ============================================================
+  // Auth flow
+  // ============================================================
+  function initAuth() {
+    if (!isCloudAvailable()) {
+      // Firebase not configured yet: fall back to plain local mode, no login required
+      state.authStatus = "approved";
+      var local = loadLocalBills();
+      if (local.length === 0) {
+        local = seedBills();
+        saveLocalBills(local);
+      }
+      state.bills = local;
+      render();
+      return;
+    }
+
+    firebase.auth().onAuthStateChanged(function (user) {
+      if (!user) {
+        if (billsRef) { billsRef.off(); billsRef = null; }
+        state.authStatus = "signedOut";
+        state.isAdmin = false;
+        state.bills = [];
+        render();
+        return;
+      }
+      state.currentEmail = user.email;
+      state.isAdmin = !!(window.ADMIN_EMAIL && user.email && user.email.toLowerCase() === window.ADMIN_EMAIL.toLowerCase());
+      registerDeviceAndProceed(user);
+    });
+  }
+
+  function registerDeviceAndProceed(user) {
+    var uid = user.uid;
+    var deviceId = getDeviceId();
+    var devRef = firebase.database().ref("users/" + uid + "/devices/" + deviceId);
+    devRef.set(true).then(function () {
+      proceedAfterDevice(user);
+    }).catch(function () {
+      state.authStatus = "deviceLimit";
+      render();
+      firebase.auth().signOut();
+    });
+  }
+
+  function proceedAfterDevice(user) {
+    var uid = user.uid;
+
+    function afterApprovalCheck(approved) {
+      if (approved || state.isAdmin) {
+        if (state.isAdmin) {
+          firebase.database().ref("approvedUsers/" + uid).set(true);
+          firebase.database().ref("pendingApprovals/" + uid).remove();
+        }
+        migrateLocalIfNeeded(uid, function () {
+          state.authStatus = "approved";
+          attachBillsListener(uid);
+          render();
+        });
+      } else {
+        firebase.database().ref("pendingApprovals/" + uid).set({ email: user.email, requestedAt: Date.now() });
+        state.authStatus = "pending";
+        render();
+      }
+    }
+
+    firebase.database().ref("approvedUsers/" + uid).once("value").then(function (snap) {
+      afterApprovalCheck(snap.val() === true);
+    }).catch(function () {
+      afterApprovalCheck(false);
+    });
+  }
+
+  function loadAdminPending() {
+    firebase.database().ref("pendingApprovals").once("value").then(function (snap) {
+      var val = snap.val() || {};
+      state.pendingUsers = Object.keys(val).map(function (uid) {
+        return { uid: uid, email: val[uid] && val[uid].email };
+      });
+      render();
+    }).catch(function () {
+      state.pendingUsers = [];
+      render();
+    });
+  }
+
+  function approveUser(uid) {
+    firebase.database().ref("approvedUsers/" + uid).set(true).then(function () {
+      firebase.database().ref("pendingApprovals/" + uid).remove();
+      loadAdminPending();
+    });
+  }
+
+  function rejectUser(uid) {
+    firebase.database().ref("pendingApprovals/" + uid).remove().then(loadAdminPending);
+  }
+
+  // ============================================================
+  // Render: top-level router
+  // ============================================================
   function render() {
+    if (state.authStatus === "checking") return renderChecking();
+    if (state.authStatus === "signedOut") return renderAuthScreen();
+    if (state.authStatus === "pending") return renderPending();
+    if (state.authStatus === "deviceLimit") return renderDeviceLimit();
+    return renderApp();
+  }
+
+  function shellOpen(narrow) {
+    return '<div class="app' + (narrow ? " app--loading" : "") + '">';
+  }
+
+  function logoBlock() {
+    return '<div class="masthead"><div class="eyebrow">Personal Ledger</div><h1>Bayarin Tracker</h1></div>';
+  }
+
+  function renderChecking() {
+    appEl.innerHTML =
+      '<div class="app app--loading"><div class="loading-box"><div class="spin"></div>Sinusuri ang account...</div></div>';
+  }
+
+  function renderAuthScreen() {
+    var isSignup = state.authMode === "signup";
+    var html = '<div class="app app--loading"><div class="auth-card">';
+    html += '<div class="auth-logo"><img src="icons/logo-wide.png" alt="Bayarin Tracker" class="auth-logo-img" /></div>';
+    html += '<div class="auth-tabs">';
+    html += '<button class="auth-tab' + (!isSignup ? " active" : "") + '" data-authmode="login">Mag-log in</button>';
+    html += '<button class="auth-tab' + (isSignup ? " active" : "") + '" data-authmode="signup">Gumawa ng Account</button>';
+    html += "</div>";
+    html += '<form id="auth-form">';
+    html += '<div class="form-group"><label>Email</label><input type="email" id="auth-email" placeholder="you@email.com" required /></div>';
+    html += '<div class="form-group"><label>Password</label><input type="password" id="auth-password" placeholder="••••••••" required /></div>';
+    if (isSignup) {
+      html += '<div class="form-group"><label>Ulitin ang Password</label><input type="password" id="auth-password2" placeholder="••••••••" required /></div>';
+    }
+    if (state.authError) {
+      html += '<div class="error-msg">' + esc(state.authError) + "</div>";
+    }
+    html += '<button type="submit" class="submit-btn">' + (isSignup ? "Gumawa ng Account" : "Mag-log in") + "</button>";
+    html += "</form>";
+    if (isSignup) {
+      html += '<p class="auth-note">Pagkatapos gumawa ng account, kailangan pa itong aprubahan bago ka makapasok.</p>';
+    }
+    html += "</div></div>";
+    appEl.innerHTML = html;
+    bindAuthEvents();
+  }
+
+  function renderPending() {
+    var html = '<div class="app app--loading"><div class="auth-card">';
+    html += '<div class="auth-logo"><img src="icons/logo-wide.png" alt="Bayarin Tracker" class="auth-logo-img" /></div>';
+    html += '<div class="pending-icon">⏳</div>';
+    html += "<h2 class=\"pending-title\">Naghihintay ng Approval</h2>";
+    html += '<p class="auth-note">Naka-sign up ka na bilang <strong>' + esc(state.currentEmail) + '</strong>.<br/>Aaprubahan muna ito bago ka makapasok. Balikan mo na lang ang page na ito paminsan-minsan.</p>';
+    html += '<button class="reset-link" id="logout-btn" style="margin-top:14px">Mag-logout</button>';
+    html += "</div></div>";
+    appEl.innerHTML = html;
+    var logoutBtn = document.getElementById("logout-btn");
+    if (logoutBtn) logoutBtn.addEventListener("click", function () { firebase.auth().signOut(); });
+  }
+
+  function renderDeviceLimit() {
+    var html = '<div class="app app--loading"><div class="auth-card">';
+    html += '<div class="auth-logo"><img src="icons/logo-wide.png" alt="Bayarin Tracker" class="auth-logo-img" /></div>';
+    html += '<div class="pending-icon">🚫</div>';
+    html += "<h2 class=\"pending-title\">Naabot na ang Limit ng Device</h2>";
+    html += '<p class="auth-note">Dalawang (2) device na lang ang pwedeng gamitin bawat account. Gumamit ng dati mo nang na-login na device, o makipag-ugnayan sa approver kung kailangan mo ng dagdag.</p>';
+    html += '<button type="button" class="submit-btn" id="back-to-login-btn">Balik sa Login</button>';
+    html += "</div></div>";
+    appEl.innerHTML = html;
+    var backBtn = document.getElementById("back-to-login-btn");
+    if (backBtn) backBtn.addEventListener("click", function () { state.authStatus = "signedOut"; render(); });
+  }
+
+  // ============================================================
+  // Main app (ledger) render
+  // ============================================================
+  function renderApp() {
     var bills = state.bills.slice().sort(function (a, b) {
       return new Date(a.dueDate) - new Date(b.dueDate);
     });
@@ -202,19 +390,24 @@
     var html = "";
 
     html += '<div class="masthead">';
-    html += '<div class="eyebrow">Personal Ledger</div>';
-    html += "<h1>Bayarin Tracker</h1>";
-    html += "<p>Itala ang lahat ng bills mo — due date, bayad, at kulang.</p>";
+    html += '<img src="icons/logo-wide-light.png" alt="Bayarin Tracker" class="masthead-logo" />';
+    if (isCloudAvailable()) {
+      html += "<p>" + esc(state.currentEmail) + "</p>";
+    } else {
+      html += "<p>Itala ang lahat ng bills mo — due date, bayad, at kulang.</p>";
+    }
+    html += '<div style="display:flex;gap:14px;justify-content:center;margin-top:6px;flex-wrap:wrap">';
     html += '<button class="reset-link" id="reset-btn">I-reset ang lahat ng data</button>';
-    html += "</div>";
+    if (isCloudAvailable()) {
+      html += '<button class="reset-link" id="logout-btn">Mag-logout</button>';
+      if (state.isAdmin) {
+        html += '<button class="reset-link" id="admin-btn">Admin Panel</button>';
+      }
+    }
+    html += "</div></div>";
 
     if (deferredInstallPrompt) {
       html += '<div class="install-banner"><span>I-install ang app na ito sa iyong device para may sariling icon.</span><button id="install-btn">I-install</button></div>';
-    }
-
-    if (isCloudAvailable()) {
-      var statusLabel = state.syncStatus === "synced" ? "Naka-sync ✓" : state.syncStatus === "connecting" ? "Kumokonekta..." : "Offline";
-      html += '<div class="install-banner"><span>Sync code: <strong>' + esc(state.syncCode || "—") + "</strong> · " + statusLabel + '</span><button id="sync-btn">Palitan / Ikonekta</button></div>';
     }
 
     html += '<div class="ledger">';
@@ -302,17 +495,24 @@
       html += "</form></div></div>";
     }
 
-    if (state.showSyncModal) {
-      html += '<div class="modal-backdrop" id="sync-modal-backdrop">';
-      html += '<div class="modal" id="sync-modal">';
-      html += '<div class="modal-header"><h2>Cloud Sync</h2><button class="close-btn" id="close-sync-modal">×</button></div>';
-      html += "<p style=\"font-size:13px;color:#6b6455;margin-top:0\">Ang code mo ngayon: <strong>" + esc(state.syncCode || "—") + "</strong><br/>I-type ang parehong code sa ibang device para magkasama ang data.</p>";
-      html += '<div class="form-group"><label>Sync Code</label><input type="text" id="sync-input" maxlength="6" style="text-transform:uppercase" placeholder="hal. AB3XQ9" value="' + esc(state.syncInput || "") + '" /></div>';
-      if (state.syncError) {
-        html += '<div class="error-msg">' + esc(state.syncError) + "</div>";
+    if (state.showAdminPanel) {
+      html += '<div class="modal-backdrop" id="admin-modal-backdrop">';
+      html += '<div class="modal" id="admin-modal">';
+      html += '<div class="modal-header"><h2>Admin Panel</h2><button class="close-btn" id="close-admin-modal">×</button></div>';
+      if (state.pendingUsers.length === 0) {
+        html += '<p style="font-size:13px;color:#6b6455">Walang naghihintay na approval ngayon.</p>';
+      } else {
+        html += '<div class="admin-list">';
+        state.pendingUsers.forEach(function (u) {
+          html += '<div class="admin-row">';
+          html += '<span class="admin-email">' + esc(u.email || u.uid) + "</span>";
+          html += '<div class="admin-actions">';
+          html += '<button class="icon-btn" data-approve="' + esc(u.uid) + '">✓ Aprubahan</button>';
+          html += '<button class="icon-btn danger" data-reject="' + esc(u.uid) + '">✕ Tanggihan</button>';
+          html += "</div></div>";
+        });
+        html += "</div>";
       }
-      html += '<button type="button" class="submit-btn" id="sync-connect-btn">Ikonekta sa Code na Ito</button>';
-      html += '<button type="button" class="reset-link" id="sync-new-btn" style="display:block;margin:12px auto 0;color:#6b6455">O gumawa ng bagong code</button>';
       html += "</div></div>";
     }
 
@@ -320,6 +520,50 @@
     bindEvents();
   }
 
+  // ============================================================
+  // Event bindings: auth screens
+  // ============================================================
+  function bindAuthEvents() {
+    document.querySelectorAll("[data-authmode]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.authMode = btn.getAttribute("data-authmode");
+        state.authError = "";
+        render();
+      });
+    });
+
+    var form = document.getElementById("auth-form");
+    if (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var email = document.getElementById("auth-email").value.trim();
+        var password = document.getElementById("auth-password").value;
+        state.authError = "";
+
+        if (state.authMode === "signup") {
+          var password2 = document.getElementById("auth-password2").value;
+          if (password !== password2) {
+            state.authError = "Hindi magkatugma ang password.";
+            render();
+            return;
+          }
+          firebase.auth().createUserWithEmailAndPassword(email, password).catch(function (err) {
+            state.authError = friendlyAuthError(err.code);
+            render();
+          });
+        } else {
+          firebase.auth().signInWithEmailAndPassword(email, password).catch(function (err) {
+            state.authError = friendlyAuthError(err.code);
+            render();
+          });
+        }
+      });
+    }
+  }
+
+  // ============================================================
+  // Event bindings: main app
+  // ============================================================
   function bindEvents() {
     var resetBtn = document.getElementById("reset-btn");
     if (resetBtn) {
@@ -331,71 +575,52 @@
       });
     }
 
-    var syncBtn = document.getElementById("sync-btn");
-    if (syncBtn) {
-      syncBtn.addEventListener("click", function () {
-        state.showSyncModal = true;
-        state.syncInput = "";
-        state.syncError = "";
-        render();
+    var logoutBtn = document.getElementById("logout-btn");
+    if (logoutBtn) {
+      logoutBtn.addEventListener("click", function () {
+        firebase.auth().signOut();
       });
     }
 
-    var closeSyncModal = document.getElementById("close-sync-modal");
-    if (closeSyncModal) {
-      closeSyncModal.addEventListener("click", function () {
-        state.showSyncModal = false;
+    var adminBtn = document.getElementById("admin-btn");
+    if (adminBtn) {
+      adminBtn.addEventListener("click", function () {
+        state.showAdminPanel = true;
         render();
+        loadAdminPending();
       });
     }
 
-    var syncBackdrop = document.getElementById("sync-modal-backdrop");
-    if (syncBackdrop) {
-      syncBackdrop.addEventListener("click", function (e) {
-        if (e.target === syncBackdrop) {
-          state.showSyncModal = false;
+    var closeAdminModal = document.getElementById("close-admin-modal");
+    if (closeAdminModal) {
+      closeAdminModal.addEventListener("click", function () {
+        state.showAdminPanel = false;
+        render();
+      });
+    }
+    var adminBackdrop = document.getElementById("admin-modal-backdrop");
+    if (adminBackdrop) {
+      adminBackdrop.addEventListener("click", function (e) {
+        if (e.target === adminBackdrop) {
+          state.showAdminPanel = false;
           render();
         }
       });
     }
-    var syncModal = document.getElementById("sync-modal");
-    if (syncModal) {
-      syncModal.addEventListener("click", function (e) {
-        e.stopPropagation();
-      });
+    var adminModal = document.getElementById("admin-modal");
+    if (adminModal) {
+      adminModal.addEventListener("click", function (e) { e.stopPropagation(); });
     }
-
-    var syncInputEl = document.getElementById("sync-input");
-    if (syncInputEl) {
-      syncInputEl.addEventListener("input", function () {
-        state.syncInput = syncInputEl.value.toUpperCase();
+    document.querySelectorAll("[data-approve]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        approveUser(btn.getAttribute("data-approve"));
       });
-    }
-
-    var syncConnectBtn = document.getElementById("sync-connect-btn");
-    if (syncConnectBtn) {
-      syncConnectBtn.addEventListener("click", function () {
-        var code = (state.syncInput || "").trim().toUpperCase();
-        if (code.length < 4) {
-          state.syncError = "Ilagay ang buong sync code (mula sa ibang device mo).";
-          render();
-          return;
-        }
-        state.showSyncModal = false;
-        connectToSync(code, { pushLocalFirst: false });
-        render();
+    });
+    document.querySelectorAll("[data-reject]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        rejectUser(btn.getAttribute("data-reject"));
       });
-    }
-
-    var syncNewBtn = document.getElementById("sync-new-btn");
-    if (syncNewBtn) {
-      syncNewBtn.addEventListener("click", function () {
-        var code = genSyncCode();
-        state.showSyncModal = false;
-        connectToSync(code, { pushLocalFirst: true });
-        render();
-      });
-    }
+    });
 
     var installBtn = document.getElementById("install-btn");
     if (installBtn) {
@@ -444,9 +669,7 @@
     }
     var modal = document.getElementById("modal");
     if (modal) {
-      modal.addEventListener("click", function (e) {
-        e.stopPropagation();
-      });
+      modal.addEventListener("click", function (e) { e.stopPropagation(); });
     }
 
     var form = document.getElementById("bill-form");
@@ -516,27 +739,12 @@
     document.querySelectorAll("[data-delete]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-delete");
-        state.bills = state.bills.filter(function (b) {
-          return b.id !== id;
-        });
+        state.bills = state.bills.filter(function (b) { return b.id !== id; });
         saveBills(state.bills);
         render();
       });
     });
   }
 
-  state.bills = loadBills();
-  render();
-
-  // Init cloud sync if Firebase is configured
-  if (isCloudAvailable()) {
-    var existingCode = localStorage.getItem(SYNC_CODE_KEY);
-    if (existingCode) {
-      connectToSync(existingCode, { pushLocalFirst: false });
-    } else {
-      state.syncCode = null;
-      state.syncStatus = "offline";
-    }
-    render();
-  }
+  initAuth();
 })();

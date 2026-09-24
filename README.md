@@ -81,3 +81,64 @@ Naka-save ang data sa **localStorage** ng browser mo bilang backup, PERO kung su
    - Magkakasama na ang data mo sa dalawang device — real-time pa ang pag-sync
 
 Kung gusto mong palitan sa isang random code para hindi mahulaan ng iba, tandaan lang ang code mo (parang password) at wag i-share sa hindi mo gustong makakita ng data mo.
+
+## Login, Approval, at Privacy ng Bawat User
+
+Bago ka lang: kailangan na ngayon ng account (email + password) para magamit ang app. Ganito ito gumagana:
+
+- **Bagong user** → gagawa ng account (email + password na sila mismo pipili) → makikita nila ang "Naghihintay ng Approval" screen
+- **Ikaw lang (base sa email mong ilalagay sa `ADMIN_EMAIL`)** ang makakakita ng **"Admin Panel"** button sa app mo — doon mo maa-approve o matatanggihan ang mga bagong sign-up
+- Bawat account = sarili at PRIVATE na listahan ng bills — walang ibang user (kahit ikaw bilang admin) ang makakakita ng laman ng bills nila
+- Kung may na-input na sila dati sa parehong phone/browser bago sila gumawa ng account, awtomatiko itong ilalagay sa bagong account nila (hindi mawawala)
+- **Max 2 devices lang** bawat email/account — kapag sinubukan gamitin sa ika-3 device, hindi na papayagan
+
+### Karagdagang setup na kailangan
+
+1. **I-enable ang Email/Password sign-in** sa Firebase:
+   - Sa Firebase Console, punta sa **Build → Authentication**
+   - Click "Get Started", piliin **"Email/Password"** sa listahan ng sign-in methods, i-enable, Save
+
+2. **Ilagay ang email mo bilang admin** sa `firebase-config.js`:
+   - Buksan ang file, hanapin ang linyang `var ADMIN_EMAIL = "PALITAN_MO_NG_EMAIL_MO@gmail.com";`
+   - Palitan ng eksaktong email na gagamitin mong mag-sign-up (ikaw bilang approver)
+
+3. **I-set up ang Database Rules** (para sa privacy at approval logic):
+   - Sa Firebase Console, punta sa **Realtime Database → Rules** tab
+   - Palitan ang laman ng "Rules" ng ganito (palitan din ang `ADMIN_EMAIL_PLACEHOLDER` ng eksaktong email mo):
+
+```json
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        "devices": {
+          "$deviceId": {
+            ".write": "auth != null && auth.uid === $uid && (data.exists() || !root.child('users').child($uid).child('devices').hasChildren() || root.child('users').child($uid).child('devices').numChildren() < 2)"
+          }
+        }
+      }
+    },
+    "pendingApprovals": {
+      ".read": "auth != null && auth.token.email === 'ADMIN_EMAIL_PLACEHOLDER'",
+      "$uid": {
+        ".write": "auth != null && (auth.uid === $uid || auth.token.email === 'ADMIN_EMAIL_PLACEHOLDER')"
+      }
+    },
+    "approvedUsers": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || auth.token.email === 'ADMIN_EMAIL_PLACEHOLDER')",
+        ".write": "auth != null && auth.token.email === 'ADMIN_EMAIL_PLACEHOLDER'"
+      }
+    }
+  }
+}
+```
+   - Click "Publish"
+
+4. **I-sign up ka muna bilang admin** sa app gamit ang email na inilagay mo sa `ADMIN_EMAIL` — awtomatiko kang maa-approve, at makikita mo agad ang "Admin Panel" button
+
+5. Pagkatapos, ang sinumang gagawa ng account ay makikita mo sa Admin Panel mo para i-approve
+
+⚠️ Tandaan: ang lumang **"sync code"** na feature ay hindi na ginagamit ngayon — ang login (email + password) na ang gagamitin para sa cross-device access, per-account at private na.

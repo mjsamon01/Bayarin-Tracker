@@ -88,6 +88,99 @@ body {
 }
 .reset-link:hover { color: #F2EFE7; }
 
+.auth-card {
+  max-width: 380px;
+  width: 100%;
+  background: #F7F5F0;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+  border: 1px solid #E4DFD1;
+  padding: 28px 24px;
+  text-align: center;
+}
+
+.auth-logo { margin-bottom: 18px; color: #1B2A41; }
+.auth-logo-img { max-width: 100%; height: auto; max-height: 90px; }
+.masthead-logo { max-width: 260px; width: 60%; height: auto; margin-bottom: 4px; }
+.auth-logo .eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8A7A4E;
+  margin-bottom: 4px;
+}
+.auth-logo h1 {
+  font-family: 'Fraunces', serif;
+  font-weight: 700;
+  font-size: 26px;
+  margin: 0;
+  color: #1B2A41;
+}
+
+.auth-tabs {
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #D8D1BD;
+  margin-bottom: 18px;
+}
+.auth-tab {
+  flex: 1;
+  padding: 9px 8px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  background: #fff;
+  border: none;
+  color: #6b6455;
+  cursor: pointer;
+}
+.auth-tab.active {
+  background: #1B2A41;
+  color: #F2EFE7;
+}
+
+.auth-note {
+  font-size: 12px;
+  color: #6b6455;
+  margin-top: 14px;
+  line-height: 1.5;
+}
+
+.pending-icon { font-size: 40px; margin-bottom: 8px; }
+.pending-title {
+  font-family: 'Fraunces', serif;
+  font-size: 20px;
+  margin: 0 0 6px;
+  color: #1B2A41;
+}
+
+.admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #E4DFD1;
+  border-radius: 8px;
+  background: #fff;
+  flex-wrap: wrap;
+}
+.admin-email {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: #2B2B2B;
+}
+.admin-actions { display: flex; gap: 6px; }
+
 .install-banner {
   max-width: 720px;
   margin: 0 auto 14px;

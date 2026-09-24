@@ -1,4 +1,4 @@
-const CACHE_NAME = "bayarin-tracker-v2";
+const CACHE_NAME = "bayarin-tracker-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -10,6 +10,8 @@ const ASSETS = [
   "./icons/icon-512.png",
   "./icons/maskable-192.png",
   "./icons/maskable-512.png",
+  "./icons/logo-wide.png",
+  "./icons/logo-wide-light.png",
 ];
 
 self.addEventListener("install", (event) => {
