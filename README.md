@@ -112,12 +112,7 @@ Bago ka lang: kailangan na ngayon ng account (email + password) para magamit ang
     "users": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid",
-        "devices": {
-          "$deviceId": {
-            ".write": "auth != null && auth.uid === $uid && (data.exists() || !root.child('users').child($uid).child('devices').hasChildren() || root.child('users').child($uid).child('devices').numChildren() < 2)"
-          }
-        }
+        ".write": "auth != null && auth.uid === $uid"
       }
     },
     "pendingApprovals": {

@@ -234,9 +234,27 @@
   function registerDeviceAndProceed(user) {
     var uid = user.uid;
     var deviceId = getDeviceId();
-    var devRef = firebase.database().ref("users/" + uid + "/devices/" + deviceId);
-    devRef.set(true).then(function () {
-      proceedAfterDevice(user);
+    var devicesRef = firebase.database().ref("users/" + uid + "/devices");
+    devicesRef.once("value").then(function (snap) {
+      var val = snap.val() || {};
+      if (val.slot1 === deviceId || val.slot2 === deviceId) {
+        proceedAfterDevice(user);
+        return;
+      }
+      var slot = !val.slot1 ? "slot1" : (!val.slot2 ? "slot2" : null);
+      if (!slot) {
+        state.authStatus = "deviceLimit";
+        render();
+        firebase.auth().signOut();
+        return;
+      }
+      devicesRef.child(slot).set(deviceId).then(function () {
+        proceedAfterDevice(user);
+      }).catch(function () {
+        state.authStatus = "deviceLimit";
+        render();
+        firebase.auth().signOut();
+      });
     }).catch(function () {
       state.authStatus = "deviceLimit";
       render();
