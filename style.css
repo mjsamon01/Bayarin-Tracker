@@ -249,39 +249,93 @@ body {
 .summary-cell.balance .value { color: #B23A2F; }
 .summary-cell.paid .value { color: #4A7A5D; }
 
-.toolbar {
+.ledger-body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 18px;
-  border-bottom: 1px solid #E4DFD1;
-  flex-wrap: wrap;
+  align-items: stretch;
 }
 
-.filters {
+.sidebar {
+  width: 190px;
+  flex-shrink: 0;
+  border-right: 1px dashed #D8D1BD;
+  padding: 16px 12px;
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  flex-wrap: wrap;
+  background: #F1EDE3;
 }
 
-.filter-btn {
+.sidebar-title {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 6px 10px;
-  border-radius: 20px;
-  border: 1px solid #D8D1BD;
+  color: #8A8370;
+  margin-bottom: 4px;
+  padding-left: 10px;
+}
+
+.side-filter-btn {
+  text-align: left;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 9px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
   background: transparent;
   color: #6b6455;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
-.filter-btn:hover { border-color: #B23A2F; color: #B23A2F; }
-.filter-btn.active {
-  background: #1B2A41;
-  border-color: #1B2A41;
-  color: #F2EFE7;
+.side-filter-btn:hover {
+  background: #fff;
+  color: #B23A2F;
+}
+.side-filter-btn.active {
+  background: #fff;
+  border-color: #E4DFD1;
+  border-left: 3px solid #B23A2F;
+  color: #1B2A41;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.add-btn-side {
+  margin-top: 14px;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+}
+
+.main-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  .ledger-body { flex-direction: column; }
+  .sidebar {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid #E4DFD1;
+  }
+  .sidebar-title { display: none; }
+  .side-filter-btn {
+    border-left: none;
+    border: 1px solid #D8D1BD;
+    border-radius: 20px;
+  }
+  .side-filter-btn.active {
+    border: 1px solid #B23A2F;
+    border-left: 1px solid #B23A2F;
+    background: #1B2A41;
+    color: #F2EFE7;
+  }
+  .add-btn-side { width: auto; margin-top: 0; }
 }
 
 .add-btn {

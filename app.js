@@ -436,8 +436,10 @@
     html += '<div class="summary-cell balance"><div class="label">Kulang / Balance' + esc(summaryLabelSuffix) + '</div><div class="value">' + peso(totals.balance) + "</div></div>";
     html += "</div>";
 
-    html += '<div class="toolbar">';
-    html += '<div class="filters">';
+    html += '<div class="ledger-body">';
+
+    html += '<div class="sidebar">';
+    html += '<div class="sidebar-title">Tingnan</div>';
     [
       ["all", "Lahat"],
       ["month", "Ngayong Buwan"],
@@ -446,12 +448,12 @@
       ["paid", "Bayad na"],
     ].forEach(function (f) {
       var active = state.filter === f[0] ? " active" : "";
-      html += '<button class="filter-btn' + active + '" data-filter="' + f[0] + '">' + f[1] + "</button>";
+      html += '<button class="side-filter-btn' + active + '" data-filter="' + f[0] + '">' + f[1] + "</button>";
     });
-    html += "</div>";
-    html += '<button class="add-btn" id="add-btn">+ Magdagdag ng Bill</button>';
+    html += '<button class="add-btn add-btn-side" id="add-btn">+ Magdagdag ng Bill</button>';
     html += "</div>";
 
+    html += '<div class="main-panel">';
     html += '<div class="entries">';
     if (filtered.length === 0) {
       html += '<div class="empty-state">Walang bill dito. I-click ang "Magdagdag ng Bill" para magsimula.</div>';
@@ -488,7 +490,7 @@
         html += "</div></div>";
       });
     }
-    html += "</div></div>";
+    html += "</div></div></div></div>";
 
     if (state.showForm) {
       html += '<div class="modal-backdrop" id="modal-backdrop">';
@@ -652,7 +654,7 @@
       });
     }
 
-    document.querySelectorAll(".filter-btn").forEach(function (btn) {
+    document.querySelectorAll(".side-filter-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.filter = btn.getAttribute("data-filter");
         render();
